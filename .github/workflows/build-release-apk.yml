@@ -1,0 +1,138 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+jobs:
+  build-apk:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Java
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 3. Setup Flutter
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.6'
+          channel: 'stable'
+          cache: true
+
+      # 4. Write app_config.dart with secrets
+      - name: Configure app secrets
+        run: |
+          cat > lib/config/app_config.dart << 'EOF'
+          class AppConfig {
+            // API Backend URL - configure your server address
+            static const String apiBaseUrl = '${{ secrets.API_BASE_URL }}';
+
+            // Map provider: google, amap, tencent, baidu
+            static const String mapProvider = 'google';
+            static const String googleMapsApiKey = '${{ secrets.GOOGLE_MAPS_API_KEY }}';
+
+            // Payment provider: stripe
+            static const String paymentProvider = 'stripe';
+            static const String stripePublishableKey = '${{ secrets.STRIPE_PUBLISHABLE_KEY }}';
+          }
+          EOF
+
+      # 5. Inject Google Maps API Key into AndroidManifest
+      - name: Inject Google Maps key into AndroidManifest.xml
+        run: |
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            sed -i 's/YOUR_GOOGLE_MAPS_API_KEY/${{ secrets.GOOGLE_MAPS_API_KEY }}/g' android/app/src/main/AndroidManifest.xml
+            # Also add the meta-data tag if not present
+            if ! grep -q "com.google.android.geo.API_KEY" android/app/src/main/AndroidManifest.xml; then
+              sed -i 's|</application>|    <meta-data android:name="com.google.android.geo.API_KEY" android:value="${{ secrets.GOOGLE_MAPS_API_KEY }}"/>\n    </application>|g' android/app/src/main/AndroidManifest.xml
+            fi
+          fi
+
+      # 6. Get Flutter dependencies
+      - name: Get Flutter packages
+        run: flutter pub get
+
+      # 7. Generate code (if needed)
+      - name: Generate code
+        run: |
+          if grep -q "build_runner" pubspec.yaml; then
+            flutter pub run build_runner build --delete-conflicting-outputs
+          fi
+
+      # 8. Build APK (release mode with signing if keystore provided, else debug-signed)
+      - name: Build APK
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
+            flutter build apk --release \
+              --dart-define=API_BASE_URL="${{ secrets.API_BASE_URL }}" \
+              --build-name="${{ github.ref_name }}" \
+              --build-number="${{ github.run_number }}"
+          else
+            flutter build apk --debug \
+              --dart-define=API_BASE_URL="${{ secrets.API_BASE_URL }}" \
+              --build-number="${{ github.run_number }}"
+          fi
+
+      # 9. Rename APK
+      - name: Rename APK
+        run: |
+          mkdir -p output
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            cp build/app/outputs/flutter-apk/app-release.apk output/uav-dispatch-v${{ github.run_number }}.apk
+          else
+            cp build/app/outputs/flutter-apk/app-debug.apk output/uav-dispatch-v${{ github.run_number }}.apk
+          fi
+          ls -lh output/
+
+      # 10. Upload APK as artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uav-dispatch-apk
+          path: output/*.apk
+          retention-days: 30
+
+      # 11. Create GitHub Release (on tag push or manual)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: UAV Dispatch Mobile ${{ github.event.inputs.release_tag || github.ref_name }}
+          body: |
+            ## UAV Dispatch Mobile App
+
+            ### 下载安装
+            - 下载 `uav-dispatch-*.apk` 文件安装到 Android 设备 (Android 7.0+)
+            - 安装前请在设置中开启"允许未知来源安装"
+
+            ### 配置说明
+            首次使用需要在 App 设置中配置后端 API 地址
+
+            ### 更新内容
+            - Build #${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+          files: output/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
