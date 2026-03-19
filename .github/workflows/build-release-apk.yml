@@ -18,18 +18,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Java
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # 3. Setup Flutter
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -37,73 +34,104 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # 4. Write app_config.dart with secrets
-      - name: Configure app secrets
+      # ── Step 1: Bootstrap a complete Flutter project structure ──────────────
+      # The repo only has lib/ and pubspec.yaml but is missing android/ directory.
+      # We create a fresh project and overlay the existing source files on top.
+      - name: Bootstrap full Flutter project (android/ etc.)
         run: |
-          cat > lib/config/app_config.dart << 'EOF'
-          class AppConfig {
-            // API Backend URL - configure your server address
-            static const String apiBaseUrl = '${{ secrets.API_BASE_URL }}';
+          # Create a clean Flutter project template in a temp dir
+          flutter create \
+            --project-name uav_dispatch \
+            --org com.uav.dispatch \
+            -t app \
+            /tmp/flutter_bootstrap
 
-            // Map provider: google, amap, tencent, baidu
-            static const String mapProvider = 'google';
-            static const String googleMapsApiKey = '${{ secrets.GOOGLE_MAPS_API_KEY }}';
+          # Copy the bootstrapped android/ to workspace (repo has no android/)
+          cp -r /tmp/flutter_bootstrap/android .
+          
+          # Copy bootstrapped test/ and other scaffolding if absent
+          [ -d test ] || cp -r /tmp/flutter_bootstrap/test .
 
-            // Payment provider: stripe
-            static const String paymentProvider = 'stripe';
-            static const String stripePublishableKey = '${{ secrets.STRIPE_PUBLISHABLE_KEY }}';
-          }
-          EOF
+          echo "Android project bootstrapped:"
+          ls android/
 
-      # 5. Inject Google Maps API Key into AndroidManifest
-      - name: Inject Google Maps key into AndroidManifest.xml
+      # ── Step 2: Fix pubspec.yaml – remove non-pub.dev packages ─────────────
+      # wechat_sdk and alipay_sdk do NOT exist on pub.dev.
+      # The dart code does NOT import them directly (auth goes via backend API).
+      # amap_flutter_map exists on pub.dev – keep it.
+      # Remove missing asset/font declarations to prevent build errors.
+      - name: Patch pubspec.yaml (remove non-existent packages & missing assets)
         run: |
-          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-            sed -i 's/YOUR_GOOGLE_MAPS_API_KEY/${{ secrets.GOOGLE_MAPS_API_KEY }}/g' android/app/src/main/AndroidManifest.xml
-            # Also add the meta-data tag if not present
-            if ! grep -q "com.google.android.geo.API_KEY" android/app/src/main/AndroidManifest.xml; then
-              sed -i 's|</application>|    <meta-data android:name="com.google.android.geo.API_KEY" android:value="${{ secrets.GOOGLE_MAPS_API_KEY }}"/>\n    </application>|g' android/app/src/main/AndroidManifest.xml
-            fi
+          python3 - <<'PYEOF'
+          import re
+
+          with open('pubspec.yaml', 'r') as f:
+              content = f.read()
+
+          # Remove wechat_sdk and alipay_sdk lines
+          content = re.sub(r'^\s*wechat_sdk:.*\n', '', content, flags=re.MULTILINE)
+          content = re.sub(r'^\s*alipay_sdk:.*\n', '', content, flags=re.MULTILINE)
+
+          # Replace with real alternatives (kept for future use, stubbed here):
+          # fluwx for WeChat, tobias for Alipay – NOT added now to keep build minimal
+
+          # Remove assets section that references missing directories
+          # (images/, icons/, animations/ and fonts/ don't exist in the repo)
+          content = re.sub(
+              r'\n  assets:\n(    - assets/[^\n]*\n)*',
+              '\n',
+              content
+          )
+          content = re.sub(
+              r'\n  fonts:\n(    .*\n)*',
+              '\n',
+              content
+          )
+
+          with open('pubspec.yaml', 'w') as f:
+              f.write(content)
+
+          print("pubspec.yaml patched successfully")
+          print(content)
+          PYEOF
+
+      # ── Step 3: Inject Google Maps key into AndroidManifest ──────────────
+      - name: Inject Google Maps API key into AndroidManifest.xml
+        run: |
+          MAPS_KEY="${{ secrets.GOOGLE_MAPS_API_KEY }}"
+          [ -z "$MAPS_KEY" ] && MAPS_KEY="PLACEHOLDER_KEY"
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "com.google.android.geo.API_KEY" "$MANIFEST"; then
+            sed -i "s|</application>|    <meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"$MAPS_KEY\"/>\n    </application>|g" "$MANIFEST"
+            echo "Injected Google Maps key into AndroidManifest.xml"
           fi
 
-      # 6. Get Flutter dependencies
+      # ── Step 4: Get Flutter packages ────────────────────────────────────
       - name: Get Flutter packages
         run: flutter pub get
 
-      # 7. Generate code (if needed)
-      - name: Generate code
-        run: |
-          if grep -q "build_runner" pubspec.yaml; then
-            flutter pub run build_runner build --delete-conflicting-outputs
-          fi
-
-      # 8. Build APK (release mode with signing if keystore provided, else debug-signed)
+      # ── Step 5: Build APK ────────────────────────────────────────────────
       - name: Build APK
         run: |
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
-            flutter build apk --release \
-              --dart-define=API_BASE_URL="${{ secrets.API_BASE_URL }}" \
-              --build-name="${{ github.ref_name }}" \
-              --build-number="${{ github.run_number }}"
-          else
-            flutter build apk --debug \
-              --dart-define=API_BASE_URL="${{ secrets.API_BASE_URL }}" \
-              --build-number="${{ github.run_number }}"
-          fi
+          flutter build apk --debug \
+            --dart-define=API_BASE_URL="${{ secrets.API_BASE_URL }}" \
+            --dart-define=GOOGLE_MAPS_API_KEY="${{ secrets.GOOGLE_MAPS_API_KEY }}" \
+            --dart-define=STRIPE_PUBLISHABLE_KEY="${{ secrets.STRIPE_PUBLISHABLE_KEY }}" \
+            --build-number="${{ github.run_number }}"
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
 
-      # 9. Rename APK
-      - name: Rename APK
+      # ── Step 6: Stage APK ────────────────────────────────────────────────
+      - name: Stage APK for release
         run: |
           mkdir -p output
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            cp build/app/outputs/flutter-apk/app-release.apk output/uav-dispatch-v${{ github.run_number }}.apk
-          else
-            cp build/app/outputs/flutter-apk/app-debug.apk output/uav-dispatch-v${{ github.run_number }}.apk
+          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            APK_PATH="build/app/outputs/apk/debug/app-debug.apk"
           fi
-          ls -lh output/
+          cp "$APK_PATH" "output/uav-dispatch-v1.0.${{ github.run_number }}.apk"
+          echo "APK size: $(du -sh output/*.apk | cut -f1)"
 
-      # 10. Upload APK as artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -111,7 +139,7 @@ jobs:
           path: output/*.apk
           retention-days: 30
 
-      # 11. Create GitHub Release (on tag push or manual)
+      # ── Step 7: Create Release ──────────────────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
@@ -119,16 +147,16 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           name: UAV Dispatch Mobile ${{ github.event.inputs.release_tag || github.ref_name }}
           body: |
-            ## UAV Dispatch Mobile App
+            ## 📱 UAV Dispatch Mobile App
+
+            无人机调度平台 Android 客户端
 
             ### 下载安装
-            - 下载 `uav-dispatch-*.apk` 文件安装到 Android 设备 (Android 7.0+)
-            - 安装前请在设置中开启"允许未知来源安装"
+            - 下载 APK 文件安装到 Android 7.0+ 设备
+            - 安装前请开启「允许安装未知来源应用」
+            - 首次使用请在 App 内设置中填入后端服务器地址
 
-            ### 配置说明
-            首次使用需要在 App 设置中配置后端 API 地址
-
-            ### 更新内容
+            ### Build 信息
             - Build #${{ github.run_number }}
             - Commit: ${{ github.sha }}
           files: output/*.apk
