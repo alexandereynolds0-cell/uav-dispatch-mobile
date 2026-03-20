@@ -121,11 +121,13 @@ class _TaskListScreenState extends State<TaskListScreen> {
     // 应用筛选
     _filteredTasks = _allTasks.where((task) {
       // 距离筛选
-      if ((task['distance'] as double) > _maxDistance) return false;
+      final distance = (task['distance'] as num).toDouble();
+      final price = (task['price'] as num).toDouble();
+
+      if (distance > _maxDistance) return false;
 
       // 价格筛选
-      if ((task['price'] as double) < _minPrice ||
-          (task['price'] as double) > _maxPrice) {
+      if (price < _minPrice || price > _maxPrice) {
         return false;
       }
 
@@ -141,12 +143,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
 
       switch (_sortBy) {
         case 'distance':
-          comparison = (a['distance'] as double)
-              .compareTo(b['distance'] as double);
+          comparison = (a['distance'] as num)
+              .toDouble()
+              .compareTo((b['distance'] as num).toDouble());
           break;
         case 'price':
-          comparison =
-              (a['price'] as int).compareTo(b['price'] as int);
+          comparison = (a['price'] as num)
+              .toDouble()
+              .compareTo((b['price'] as num).toDouble());
           break;
         case 'time':
         default:
@@ -547,7 +551,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
               const SizedBox(height: 16),
 
               // 距离范围
-              const Text('最大距离: ${_maxDistance.toStringAsFixed(1)}km'),
+              Text('最大距离: ${_maxDistance.toStringAsFixed(1)}km'),
               Slider(
                 value: _maxDistance,
                 min: 0,
