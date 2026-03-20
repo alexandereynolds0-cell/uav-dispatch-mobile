@@ -141,6 +141,41 @@ class ApiService {
     }
   }
 
+  /// 通用社交登录
+  Future<Map<String, dynamic>> loginWithSocialProvider(
+    String provider,
+    String identifier,
+    String nickname,
+    String? email, {
+    String role = 'customer',
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/api/trpc/auth.socialLogin',
+        data: {
+          'provider': provider,
+          'identifier': identifier,
+          'nickname': nickname,
+          'email': email,
+          'role': role,
+        },
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (_) {
+      // Fallback to provider-specific endpoints for older backends.
+      switch (provider) {
+        case 'wechat':
+          return loginWithWechat(identifier, role: role);
+        case 'alipay':
+          return loginWithAlipay(identifier, role: role);
+        case 'google':
+          return loginWithGoogle(identifier, role: role);
+        default:
+          rethrow;
+      }
+    }
+  }
+
   /// 微信登录
   Future<Map<String, dynamic>> loginWithWechat(
     String code, {
