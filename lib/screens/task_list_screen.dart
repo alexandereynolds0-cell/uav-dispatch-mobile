@@ -551,7 +551,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
               const SizedBox(height: 16),
 
               // 距离范围
-              const Text('最大距离: ${_maxDistance.toStringAsFixed(1)}km'),
+              Text('最大距离: ${_maxDistance.toStringAsFixed(1)}km'),
               Slider(
                 value: _maxDistance,
                 min: 0,
