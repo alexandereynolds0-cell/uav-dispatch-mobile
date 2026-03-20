@@ -3,7 +3,7 @@ class AppConfig {
   // API配置
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:3000',
+    defaultValue: 'http://10.0.2.2:3000',
   );
   
   // 地图配置
