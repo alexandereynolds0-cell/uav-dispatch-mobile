@@ -91,6 +91,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.clear();
 
     final message = await ChatService.sendMessage(
+      conversationId: widget.conversationId,
       receiverId: widget.receiverId,
       content: content,
     );

@@ -1,25 +1,15 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import '../config/app_config.dart';
 import '../models/chat_message.dart';
+import 'api_service.dart';
 
 /// 聊天服务 - 处理消息发送、接收和敏感词过滤
 class ChatService {
-  static const String _baseUrl = '${AppConfig.apiBaseUrl}/api/chat';
+  static final ApiService _apiService = ApiService();
 
   /// 获取对话列表
   static Future<List<Conversation>> getConversations() async {
     try {
-      final response = await http.get(
-        Uri.parse('$_baseUrl/conversations'),
-        headers: {'Content-Type': 'application/json'},
-      );
-
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        return data.map((e) => Conversation.fromJson(e)).toList();
-      }
-      return [];
+      final data = await _apiService.getConversations();
+      return data.map(Conversation.fromJson).toList();
     } catch (e) {
       print('Error fetching conversations: $e');
       return [];
@@ -29,16 +19,8 @@ class ChatService {
   /// 获取历史消息
   static Future<List<ChatMessage>> getMessages(int conversationId) async {
     try {
-      final response = await http.get(
-        Uri.parse('$_baseUrl/messages/$conversationId'),
-        headers: {'Content-Type': 'application/json'},
-      );
-
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        return data.map((e) => ChatMessage.fromJson(e)).toList();
-      }
-      return [];
+      final data = await _apiService.getMessages(conversationId);
+      return data.map(ChatMessage.fromJson).toList();
     } catch (e) {
       print('Error fetching messages: $e');
       return [];
@@ -47,25 +29,22 @@ class ChatService {
 
   /// 发送消息（自动检测敏感词）
   static Future<ChatMessage?> sendMessage({
-    required int receiverId,
+    required int conversationId,
+    int? receiverId,
     required String content,
     MessageType type = MessageType.text,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$_baseUrl/send'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'receiver_id': receiverId,
-          'content': content,
-          'type': type.name,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        return ChatMessage.fromJson(json.decode(response.body));
-      }
-      return null;
+      final response = await _apiService.sendMessage(conversationId, content);
+      return ChatMessage.fromJson({
+        ...response,
+        if (!response.containsKey('receiver_id') && receiverId != null) 'receiver_id': receiverId,
+        if (!response.containsKey('receiver_name')) 'receiver_name': '',
+        if (!response.containsKey('content')) 'content': content,
+        if (!response.containsKey('type')) 'type': type.name,
+        if (!response.containsKey('status')) 'status': MessageStatus.sent.name,
+        if (!response.containsKey('created_at')) 'created_at': DateTime.now().toIso8601String(),
+      });
     } catch (e) {
       print('Error sending message: $e');
       return null;
@@ -74,51 +53,34 @@ class ChatService {
 
   /// 检查消息是否包含敏感信息（本地预检）
   static SensitiveContentResult checkSensitiveContent(String content) {
-    // 手机号正则
-    final phoneRegex = RegExp(
-      r'1[3-9]\d{9}',
-      caseSensitive: false,
-    );
-    
-    // 微信号正则
+    final phoneRegex = RegExp(r'1[3-9]\d{9}', caseSensitive: false);
     final wechatRegex = RegExp(
       r'wx[:：]?\w{5,20}|wechat[:：]?\w{5,20}|微信[:：]?\w{5,20}',
       caseSensitive: false,
     );
-    
-    // QQ号正则
-    final qqRegex = RegExp(
-      r'qq[:：]?\d{5,11}|\d{5,11}qq',
-      caseSensitive: false,
-    );
-    
-    // 邮箱正则
-    final emailRegex = RegExp(
-      r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
-    );
-    
-    // 其他联系方式关键词
+    final qqRegex = RegExp(r'qq[:：]?\d{5,11}|\d{5,11}qq', caseSensitive: false);
+    final emailRegex = RegExp(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}');
+
     final contactKeywords = [
       '加我', '加微信', '加QQ', '加我微信', '私聊',
       '电话', '手机号', '联系我', '联系方式',
       'v:x', 'vx', 'v信',
     ];
 
-    bool hasPhone = phoneRegex.hasMatch(content);
-    bool hasWechat = wechatRegex.hasMatch(content);
-    bool hasQQ = qqRegex.hasMatch(content);
-    bool hasEmail = emailRegex.hasMatch(content);
-    bool hasKeywords = contactKeywords.any((k) => content.toLowerCase().contains(k.toLowerCase()));
+    final hasPhone = phoneRegex.hasMatch(content);
+    final hasWechat = wechatRegex.hasMatch(content);
+    final hasQQ = qqRegex.hasMatch(content);
+    final hasEmail = emailRegex.hasMatch(content);
+    final hasKeywords = contactKeywords.any((k) => content.toLowerCase().contains(k.toLowerCase()));
 
     if (hasPhone || hasWechat || hasQQ || hasEmail || hasKeywords) {
-      // 替换敏感内容
-      String filtered = content;
-      filtered = filtered.replaceAll(phoneRegex, '***');
-      filtered = filtered.replaceAll(wechatRegex, 'wx: ***');
-      filtered = filtered.replaceAll(qqRegex, 'qq: ***');
-      filtered = filtered.replaceAll(emailRegex, '***@***.***');
+      var filtered = content
+          .replaceAll(phoneRegex, '***')
+          .replaceAll(wechatRegex, 'wx: ***')
+          .replaceAll(qqRegex, 'qq: ***')
+          .replaceAll(emailRegex, '***@***.***');
 
-      for (var keyword in contactKeywords) {
+      for (final keyword in contactKeywords) {
         filtered = filtered.replaceAll(RegExp(keyword, caseSensitive: false), '***');
       }
 
@@ -138,18 +100,15 @@ class ChatService {
     return SensitiveContentResult(
       hasSensitiveContent: false,
       filteredContent: content,
-      reasons: [],
+      reasons: const [],
     );
   }
 
   /// 标记消息为已读
   static Future<bool> markAsRead(int conversationId) async {
     try {
-      final response = await http.post(
-        Uri.parse('$_baseUrl/read/$conversationId'),
-        headers: {'Content-Type': 'application/json'},
-      );
-      return response.statusCode == 200;
+      await _apiService.markNotificationAsRead(conversationId);
+      return true;
     } catch (e) {
       print('Error marking as read: $e');
       return false;
@@ -157,7 +116,6 @@ class ChatService {
   }
 }
 
-/// 敏感内容检测结果
 class SensitiveContentResult {
   final bool hasSensitiveContent;
   final String filteredContent;
