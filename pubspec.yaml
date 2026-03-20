@@ -38,8 +38,6 @@ dependencies:
   
   # Social login
   google_sign_in: ^6.1.0
-  wechat_sdk: ^1.0.0
-  alipay_sdk: ^1.0.0
   
   # Utils
   intl: ^0.18.0
@@ -58,23 +56,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   
-  assets:
-    - assets/images/
-    - assets/icons/
-    - assets/animations/
   
-  fonts:
-    - family: Poppins
-      fonts:
-        - asset: assets/fonts/Poppins-Regular.ttf
-        - asset: assets/fonts/Poppins-Bold.ttf
-          weight: 700
-        - asset: assets/fonts/Poppins-SemiBold.ttf
-          weight: 600
-    - family: Inter
-      fonts:
-        - asset: assets/fonts/Inter-Regular.ttf
-        - asset: assets/fonts/Inter-Bold.ttf
-          weight: 700
-        - asset: assets/fonts/Inter-SemiBold.ttf
-          weight: 600
